@@ -1,82 +1,123 @@
-TECHNICAL_REPORT.md
-
-
-## Quickstart (Windows CMD)
-```bat
-cd ds-titanic-ml-pipeline
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-
-python -m src.train --train data/raw/train.csv --test data/raw/test.csv --out outputs
-
-Outputs
-
-outputs/metrics.json — evaluation metrics on validation split
-
-outputs/model.joblib — trained sklearn pipeline
-
-outputs/submission.csv — Kaggle-ready submission file
-
-Notes
-
-This baseline prioritizes clean structure and reproducibility over leaderboard optimization.
-
-Improvements are listed in TECHNICAL_REPORT.md.
-
-
-## New Technical Report (add `TECHNICAL_REPORT.md`)
-```md
 # Technical Report — Titanic Survival Prediction (ML Pipeline)
 
 ## 1. Objective
-Predict passenger survival on the Titanic using the Kaggle dataset. The goal of this repository is to present an end-to-end ML pipeline with clean engineering practices (reproducible runs, clear outputs, and maintainable structure).
+The objective of this project is to predict passenger survival on the Titanic using the Kaggle Titanic dataset.  
+The primary goal is to demonstrate a clean, reproducible, and well-structured end-to-end machine learning pipeline rather than optimizing for leaderboard rank.
 
-## 2. Approach
-### 2.1 Data inputs
-- Training data: `train.csv` containing features + target `Survived`
-- Test data: `test.csv` containing features only
+---
 
-### 2.2 Features used
-A compact, defensible feature set:
-- Numeric: `Pclass`, `Age`, `SibSp`, `Parch`, `Fare`
-- Categorical: `Sex`, `Embarked`
+## 2. Data
 
-Rationale: these features are well-known high-signal predictors for Titanic and allow a clean baseline without heavy feature engineering.
+### 2.1 Source
+Dataset sourced from the Kaggle Titanic competition.
 
-### 2.3 Preprocessing
-- Numeric: median imputation
-- Categorical: most-frequent imputation + one-hot encoding (handle unknown categories)
+### 2.2 Files
+- `train.csv`: feature set with target column `Survived`
+- `test.csv`: feature set without target labels
 
-Implementation: `sklearn.compose.ColumnTransformer` inside an sklearn `Pipeline`.
+---
 
-### 2.4 Model choice
-- Logistic Regression baseline
-Rationale: strong baseline, interpretable coefficients, stable training, low risk of leakage and overfit in a small dataset.
+## 3. Features Used
 
-## 3. Evaluation
-- Validation approach: train/validation split
-- Metric: accuracy + classification report summary
+A compact and defensible feature subset was selected:
 
-The goal is consistent and reproducible evaluation rather than leaderboard maximization.
+### Numeric features
+- `Pclass`
+- `Age`
+- `SibSp`
+- `Parch`
+- `Fare`
 
-## 4. Artifacts
-- `model.joblib`: persisted sklearn pipeline
-- `metrics.json`: accuracy + classification report
-- `submission.csv`: Kaggle submission format
+### Categorical features
+- `Sex`
+- `Embarked`
 
-## 5. Key Engineering Decisions
-1) Pipeline-based preprocessing to prevent training/serving skew  
-2) Robust handling for missing values  
-3) One-command run producing deterministic artifacts
+**Rationale:**  
+These features are well-known high-signal predictors for Titanic survival and allow the construction of a strong baseline without complex feature engineering.
 
-## 6. Limitations
-- Simple baseline model, minimal feature engineering
-- Single validation split (no cross-validation)
-- No hyperparameter search
+---
 
-## 7. Recommended next upgrades
-- Stratified split with fixed random seed
-- Cross-validation and calibration
-- Add engineered features (Title from Name, FamilySize, Cabin indicator)
-- Add unit tests and CI linting
+## 4. Preprocessing
+
+Preprocessing is implemented inside an sklearn `Pipeline` to avoid data leakage.
+
+### Steps
+- Numeric features: median imputation
+- Categorical features: most-frequent imputation
+- Encoding: one-hot encoding with `handle_unknown="ignore"`
+
+### Implementation
+- `ColumnTransformer` combines numeric and categorical preprocessing
+- Entire preprocessing logic is coupled with the model inside a single pipeline
+
+---
+
+## 5. Model
+
+### Algorithm
+- Logistic Regression
+
+### Justification
+- Interpretable coefficients
+- Stable and fast training
+- Suitable as a baseline for small-to-medium tabular datasets
+- Low risk of overfitting when combined with simple preprocessing
+
+---
+
+## 6. Evaluation
+
+### Validation strategy
+- Train/validation split with fixed random seed
+- Validation performed only on training data
+- Final model retrained on full dataset before inference
+
+### Metrics
+- Accuracy
+- Full classification report (precision, recall, F1-score)
+
+---
+
+## 7. Artifacts
+
+The pipeline generates the following artifacts:
+
+- `metrics.json`: validation metrics and classification report
+- `model.joblib`: trained sklearn pipeline
+- `submission.csv`: Kaggle submission file
+
+All artifacts are generated via a single command and are excluded from version control.
+
+---
+
+## 8. Key Engineering Decisions
+
+1. Pipeline-based preprocessing to prevent training/serving skew  
+2. Explicit feature selection to maintain clarity and interpretability  
+3. Deterministic execution via fixed random seed  
+4. Clear separation between source code, data, and outputs  
+
+---
+
+## 9. Limitations
+
+- No cross-validation
+- No hyperparameter tuning
+- Minimal feature engineering
+- Baseline model only
+
+---
+
+## 10. Recommended Next Steps
+
+- Stratified cross-validation
+- Feature engineering (Title extraction, FamilySize, CabinDeck)
+- Model comparison with tree-based algorithms
+- Unit tests and CI integration
+Final step (commit & push)
+bat
+Copy code
+cd /d C:\GitHub\portfolio\ds-titanic-ml-pipeline
+git add TECHNICAL_REPORT.md
+git commit -m "Add technical report"
+git push
