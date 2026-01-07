@@ -1,8 +1,12 @@
-\
 import argparse
 import json
 import os
+import platform
+import sys
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import List
 
 import joblib
 import numpy as np
@@ -11,24 +15,27 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
 
-@dataclass
-class Paths:
-    train_csv: str
-    test_csv: str
-    out_dir: str
+@dataclass(frozen=True)
+class Config:
+    features: List[str]
+    num_cols: List[str]
+    cat_cols: List[str]
+    test_size: float
+    seed: int
+
+
+DEFAULT_FEATURES = ["Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked"]
+DEFAULT_NUM = ["Pclass", "Age", "SibSp", "Parch", "Fare"]
+DEFAULT_CAT = ["Sex", "Embarked"]
 
 
 def build_pipeline(num_cols, cat_cols) -> Pipeline:
-    numeric = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-        ]
-    )
-
+    numeric = Pipeline(steps=[("imputer", SimpleImputer(strategy="median"))])
     categorical = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
@@ -45,70 +52,113 @@ def build_pipeline(num_cols, cat_cols) -> Pipeline:
     )
 
     clf = LogisticRegression(max_iter=500)
-
     return Pipeline(steps=[("pre", pre), ("clf", clf)])
 
 
-def main(p: Paths) -> int:
-    os.makedirs(p.out_dir, exist_ok=True)
+def require_columns(df: pd.DataFrame, cols: List[str], name: str) -> None:
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"{name} is missing required columns: {missing}")
 
-    train = pd.read_csv(p.train_csv)
-    test = pd.read_csv(p.test_csv)
+
+def make_run_dir(out_root: str) -> Path:
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(out_root) / f"run_{ts}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def main(train_csv: str, test_csv: str, out_dir: str, test_size: float, seed: int) -> int:
+    train_path = Path(train_csv)
+    test_path = Path(test_csv)
+
+    if not train_path.exists():
+        raise FileNotFoundError(f"Train file not found: {train_path}")
+    if not test_path.exists():
+        raise FileNotFoundError(f"Test file not found: {test_path}")
+
+    train = pd.read_csv(train_path)
+    test = pd.read_csv(test_path)
 
     if "Survived" not in train.columns:
         raise ValueError("train.csv must contain a 'Survived' column (Kaggle Titanic).")
+    if "PassengerId" not in test.columns:
+        raise ValueError("test.csv must contain 'PassengerId' column (Kaggle Titanic).")
+
+    cfg = Config(
+        features=DEFAULT_FEATURES,
+        num_cols=DEFAULT_NUM,
+        cat_cols=DEFAULT_CAT,
+        test_size=test_size,
+        seed=seed,
+    )
+
+    # Validate columns in BOTH files
+    require_columns(train, cfg.features, "train.csv")
+    require_columns(test, cfg.features, "test.csv")
 
     y = train["Survived"].astype(int)
-    X = train.drop(columns=["Survived"])
+    X = train[cfg.features].copy()
+    X_test = test[cfg.features].copy()
 
-    # Standard, reasonable feature set for a clean baseline
-    features = ["Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked"]
-    missing = [c for c in features if c not in X.columns]
-    if missing:
-        raise ValueError(f"Missing expected columns in train.csv: {missing}")
+    pipe = build_pipeline(num_cols=cfg.num_cols, cat_cols=cfg.cat_cols)
 
-    X = X[features].copy()
-    X_test = test[features].copy()
+    # Professional validation split: deterministic + stratified
+    X_tr, X_va, y_tr, y_va = train_test_split(
+        X,
+        y,
+        test_size=cfg.test_size,
+        random_state=cfg.seed,
+        stratify=y,
+    )
 
-    num_cols = ["Pclass", "Age", "SibSp", "Parch", "Fare"]
-    cat_cols = ["Sex", "Embarked"]
+    pipe.fit(X_tr, y_tr)
+    va_pred = pipe.predict(X_va)
 
-    pipe = build_pipeline(num_cols=num_cols, cat_cols=cat_cols)
+    acc = float(accuracy_score(y_va, va_pred))
+    report = classification_report(y_va, va_pred, output_dict=True)
 
-    # quick internal validation split (not Kaggle-optimized; meant to show workflow)
-    rng = np.random.default_rng(42)
-    idx = np.arange(len(X))
-    rng.shuffle(idx)
-    split = int(len(X) * 0.8)
-    tr_idx, va_idx = idx[:split], idx[split:]
+    run_dir = make_run_dir(out_dir)
 
-    pipe.fit(X.iloc[tr_idx], y.iloc[tr_idx])
-    pred = pipe.predict(X.iloc[va_idx])
+    save_json(
+        run_dir / "metrics.json",
+        {
+            "accuracy": acc,
+            "classification_report": report,
+            "validation": {"test_size": cfg.test_size, "seed": cfg.seed, "stratify": True},
+            "features": cfg.features,
+        },
+    )
 
-    acc = float(accuracy_score(y.iloc[va_idx], pred))
-    report = classification_report(y.iloc[va_idx], pred, output_dict=True)
-
-    metrics_path = os.path.join(p.out_dir, "metrics.json")
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump({"accuracy": acc, "report": report}, f, indent=2)
-
-    model_path = os.path.join(p.out_dir, "model.joblib")
-    joblib.dump(pipe, model_path)
-
-    # Train full model and generate submission
+    # Save model trained on FULL train set
     pipe.fit(X, y)
-    test_pred = pipe.predict(X_test)
+    joblib.dump(pipe, run_dir / "model.joblib")
 
-    if "PassengerId" not in test.columns:
-        raise ValueError("test.csv must contain PassengerId column (Kaggle Titanic).")
+    test_pred = pipe.predict(X_test).astype(int)
+    sub = pd.DataFrame({"PassengerId": test["PassengerId"].astype(int), "Survived": test_pred})
+    sub.to_csv(run_dir / "submission.csv", index=False)
 
-    sub = pd.DataFrame({"PassengerId": test["PassengerId"], "Survived": test_pred.astype(int)})
-    sub_path = os.path.join(p.out_dir, "submission.csv")
-    sub.to_csv(sub_path, index=False)
+    # Pro: run metadata
+    save_json(
+        run_dir / "run_metadata.json",
+        {
+            "created_utc": datetime.utcnow().isoformat() + "Z",
+            "python": sys.version,
+            "platform": platform.platform(),
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "out_dir": str(run_dir),
+        },
+    )
 
-    print(f"Saved metrics: {metrics_path}")
-    print(f"Saved model:   {model_path}")
-    print(f"Saved submit:  {sub_path}")
+    print(f"[OK] Run dir:    {run_dir}")
+    print(f"[OK] Metrics:    {run_dir / 'metrics.json'}")
+    print(f"[OK] Model:      {run_dir / 'model.joblib'}")
+    print(f"[OK] Submission: {run_dir / 'submission.csv'}")
     return 0
 
 
@@ -116,7 +166,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", required=True, help="Path to Kaggle Titanic train.csv")
     ap.add_argument("--test", required=True, help="Path to Kaggle Titanic test.csv")
-    ap.add_argument("--out", default="outputs", help="Output directory")
+    ap.add_argument("--out", default="outputs", help="Output directory root")
+    ap.add_argument("--test-size", type=float, default=0.2, help="Validation split fraction")
+    ap.add_argument("--seed", type=int, default=42, help="Random seed")
     args = ap.parse_args()
 
-    raise SystemExit(main(Paths(args.train, args.test, args.out)))
+    raise SystemExit(main(args.train, args.test, args.out, args.test_size, args.seed))
